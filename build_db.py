@@ -150,9 +150,38 @@ active_apps = [
     ('Woodlands Sales Admin Assistant (undisclosed)', 'Sales Admin Assistant', '未知（本地）', 'JobStreet', 'Pursuing', '2026-09-19', '/areas/woodlands-salesadmin.md', 'Private Advertiser, North Region'),
     ('Yonyou Singapore', 'Business Development Executive', '企业软件/ERP', 'JobStreet', 'Pursuing', '2026-09-03', '/areas/yonyou-bd.md', None),
 ]
+
+# 【2026-09-24 更正】上面列表里的 channel 有一部分是构建时推断的，memory 描述里并没有写渠道。
+# 只保留描述里有明确证据的渠道（JobStreet编号 / LinkedIn job编号 / 写明email / 写明recruiter），
+# 其余一律改为 'unknown'，不猜。channel_evidence 记录依据。
+CHANNEL_EVIDENCE = {
+    'Ding Yue Pte Ltd': ('JobStreet', '描述含 JobStreet 94820986'),
+    'Four Points by Sheraton (Riverview)': ('JobStreet', '描述含 JobStreet 94834928'),
+    'K.U.S Holdings (S) Pte Ltd': ('JobStreet', '描述含 JobStreet 94848058'),
+    'Linkwave Technologies / Linkwave AI': ('JobStreet', '描述含 JobStreet 94609284'),
+    'Prudential Assurance Singapore': ('JobStreet', '描述含 JobStreet 94829427'),
+    'Singapore Manufacturing Federation': ('JobStreet', '描述含 JobStreet 94848645'),
+    'UQPAY': ('JobStreet', '描述含 JobStreet 94831679'),
+    'Mapletree': ('LinkedIn', '描述含 LinkedIn job 4467849400'),
+    'Goodland Investments (Goodland Group)': ('直投邮件', '描述写明 applying by email'),
+    'Lobb Heng Pte Ltd': ('直投邮件', '描述写明 applying by email'),
+    'Soleum Energy': ('直投邮件', '描述写明 applied via email'),
+    'Michael Page (unnamed FMCG client)': ('猎头 recruiter', '描述写明 via Michael Page consultant'),
+    'Quess (after-sales/spare parts MNC)': ('猎头 recruiter', '描述写明 via Quess recruiter'),
+    'PERSOL (unnamed financial-institution client)': ('猎头 recruiter', '描述写明 via recruiter PERSOL（岗位挂在 JobStreet 94847831）'),
+}
+SECTOR_FIX = {'K.U.S Holdings (S) Pte Ltd': '未知（"采购"是岗位职能，不是行业）'}
+
+fixed_apps = []
+for row in active_apps:
+    company, title, sector, _channel, status, sdate, mfile, notes = row
+    ch, ev = CHANNEL_EVIDENCE.get(company, ('unknown', 'memory 描述未写渠道，不推断'))
+    sector = SECTOR_FIX.get(company, sector)
+    fixed_apps.append((company, title, sector, ch, ev, status, sdate, mfile, notes))
+
 conn.executemany("""INSERT INTO applications
-    (company, job_title_en, sector, channel, status, status_date, memory_file, notes)
-    VALUES (?,?,?,?,?,?,?,?)""", active_apps)
+    (company, job_title_en, sector, channel, channel_evidence, status, status_date, memory_file, notes)
+    VALUES (?,?,?,?,?,?,?,?,?)""", fixed_apps)
 
 # ---------------------------------------------------------------
 # 5) meta —— 记录数据核实到什么时间点，供增量更新脚本判断从哪天开始查新邮件
@@ -163,6 +192,9 @@ meta_rows = [
     ('applications_snapshot_as_of', '2026-09-24'),
     ('db_built_date', '2026-09-24'),
     ('db_build_note', '所有数据来自已核实的看板/抽样/memory记录，本次构建未重新扫描Gmail全量邮件'),
+    ('fix_2026-09-24_channel', 'applications.channel 原先部分为推断值，已改为只保留有明确证据的渠道，其余为 unknown'),
+    ('flag_expired_exceeds_js', '累计过期通知(964) > 累计JobStreet投递(912)，2025-05时已是41 vs 28；过期数不能全部解读为"我投的岗位没回音"，可能含收藏未投的岗位，或JobStreet投递数有漏计，需邮件层面核实'),
+    ('applications_sector_note', 'applications.sector 部分为常识性行业标签（如 Mapletree=房地产），非来自 memory 描述原文'),
 ]
 conn.executemany("INSERT INTO meta (key, value) VALUES (?,?)", meta_rows)
 
