@@ -1,70 +1,61 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-模式分析脚本：只读 job_search_tracker.db，不查 Gmail。
-重跑方法：python3 analysis.py
-注意：月度数据是"当月投递"和"当月收到的结果"，不是同一批申请的前后追踪，
-所以这里的比率是月度层面的规律，不是逐份申请的转化率。
+模式分析（第三版，基于逐条投递记录 application_log / application_events）
+只读 job_search_tracker.db，不查 Gmail。重跑：python3 analysis.py
+注意：2026-09 的投递还在进行中，按投递批次算比例时排除。
 """
-import sqlite3, os, math, statistics as st
+import sqlite3, os, re, statistics as st
 
 DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "job_search_tracker.db")
-c = sqlite3.connect(DB).cursor()
-rows = c.execute("""SELECT month, js_submitted, li_submitted, direct_submitted,
-                    total_submitted, rejected, expired, viewed
-                    FROM monthly_stats ORDER BY month""").fetchall()
-m   = [r[0] for r in rows]; js = [r[1] for r in rows]; li = [r[2] for r in rows]
-tot = [r[4] for r in rows]; rej = [r[5] for r in rows]
-exp = [r[6] for r in rows]; vw = [r[7] for r in rows]
+c = sqlite3.connect(DB)
+q = lambda s, p=(): c.execute(s, p).fetchall()
+pct = lambda a, b: f"{100*a/b:.1f}%" if b else "-"
 
-def r(x, y):
-    mx, my = st.mean(x), st.mean(y)
-    num = sum((a - mx) * (b - my) for a, b in zip(x, y))
-    return num / math.sqrt(sum((a - mx) ** 2 for a in x) * sum((b - my) ** 2 for b in y))
+print("=== 0. 总量 ===")
+for ch, n in q("SELECT channel, COUNT(*) FROM application_log GROUP BY 1 ORDER BY 2 DESC"):
+    print(f"{ch}: {n}")
+print("合计:", q("SELECT COUNT(*) FROM application_log")[0][0])
+ats = q("SELECT COUNT(*) FROM application_events WHERE type='ats_ack'")[0][0]
+print(f"另有 {ats} 封公司官网/ATS 确认邮件，未计入上面的投递数（未清洗，含重复和提醒邮件）")
 
-def ols(x, y):
-    mx, my = st.mean(x), st.mean(y)
-    b = sum((a - mx) * (v - my) for a, v in zip(x, y)) / sum((a - mx) ** 2 for a in x)
-    return my - b * mx, b
+print("\n=== 1. 每份投递的最终结果（按投递批次，不含 2026-09）===")
+for ch in ("JobStreet", "LinkedIn", "直投邮件"):
+    rows = dict(q("""SELECT outcome, COUNT(*) FROM application_log
+                     WHERE channel=? AND applied_month<'2026-09' GROUP BY 1""", (ch,)))
+    n = sum(rows.values())
+    print(ch, n, {k: f"{v} ({pct(v, n)})" for k, v in sorted(rows.items(), key=lambda x: -x[1])})
 
-print("=== 发现1：拒信数量几乎完全由 JobStreet 投递量决定 ===")
-a0, b = ols(js, rej)
-print(f"同月相关系数 r(拒信, JobStreet投递) = {r(js, rej):.2f}")
-print(f"滞后一个月   r(拒信, 上月JobStreet投递) = {r(js[:-1], rej[1:]):.2f}")
-print(f"回归：拒信 = {a0:.2f} + {b:.3f} × JobStreet投递（截距≈0）")
-big = [i for i in range(len(m)) if js[i] >= 40]
-ratios = [rej[i] / js[i] for i in big]
-print(f"JobStreet月投递≥40的{len(big)}个月，拒信/投递 均值 {st.mean(ratios):.1%}，标准差 {st.stdev(ratios):.1%}")
+print("\n=== 2. 硕士毕业前后（JobStreet，按投递批次）===")
+for g, cond in (("毕业前 2025-03~12", "applied_month<'2026-01'"),
+                ("毕业后 2026-01~08", "applied_month>='2026-01' AND applied_month<'2026-09'")):
+    n, rej, vw, exp = q(f"""SELECT COUNT(*), SUM(rejected_at IS NOT NULL), SUM(viewed_at IS NOT NULL),
+                            SUM(outcome='expired_no_reply') FROM application_log
+                            WHERE channel='JobStreet' AND {cond}""")[0]
+    print(f"{g}: 投递 {n}，被拒 {pct(rej, n)}，被查看 {pct(vw, n)}，过期无回音 {pct(exp, n)}")
 
-print("\n=== 发现2：硕士毕业前后，拒信比例没有变化 ===")
-def agg(sel):
-    J = sum(js[i] for i in sel); L = sum(li[i] for i in sel)
-    R = sum(rej[i] for i in sel); V = sum(vw[i] for i in sel)
-    return J, L, R, V
-pre  = [i for i, x in enumerate(m) if x < '2026-01']
-post = [i for i, x in enumerate(m) if x >= '2026-01']
-for name, sel in [("毕业前 2025-03~12", pre), ("毕业后 2026-01~09", post)]:
-    J, L, R, V = agg(sel)
-    print(f"{name}: JobStreet {J}，拒信 {R}，拒信/JS {R/J:.1%}；查看 {V}，查看/(JS+LI) {V/(J+L):.1%}")
-J1, L1, _, V1 = agg(pre); J2, L2, _, V2 = agg(post)
-p1, p2 = V1 / (J1 + L1), V2 / (J2 + L2); pp = (V1 + V2) / (J1 + L1 + J2 + L2)
-z = (p2 - p1) / math.sqrt(pp * (1 - pp) * (1 / (J1 + L1) + 1 / (J2 + L2)))
-print(f"查看率变化的两比例 z 检验 z = {z:.2f}（|z|<1.96，不显著）")
+print("\n=== 3. JobStreet 拒信：多快到、拒之前雇主有没有打开过 ===")
+d = sorted(r[0] for r in q("SELECT days_to_reject FROM application_log WHERE channel='JobStreet' AND days_to_reject IS NOT NULL"))
+print(f"拒信 {len(d)} 封，投递到拒信中位数 {st.median(d):.1f} 天，四分位 {d[len(d)//4]:.1f}–{d[3*len(d)//4]:.1f} 天")
+seen, unseen = q("""SELECT SUM(viewed_at IS NOT NULL AND viewed_at<=rejected_at), SUM(viewed_at IS NULL OR viewed_at>rejected_at)
+                    FROM application_log WHERE channel='JobStreet' AND rejected_at IS NOT NULL""")[0]
+print(f"拒信前收到过'雇主已查看'通知：{seen}（{pct(seen, len(d))}）；没收到：{unseen}（{pct(unseen, len(d))}）")
 
-print("\n=== 发现3：拒信原因抽样 ===")
-s = c.execute("SELECT SUM(with_feedback), SUM(cites_work_permit) FROM rejection_sample").fetchone()
-print(f"带反馈详情 {s[0]} 封，标注工作权限 {s[1]} 封（{s[1]/s[0]:.0%}）")
-for row in c.execute("""SELECT r.month, r.company, r.reason_detail, c.size_category
-                        FROM rejection_sample r LEFT JOIN companies c ON r.company=c.name
-                        WHERE r.is_exception=1 ORDER BY r.month"""):
-    print("  例外", row)
-
-print("\n=== 数据质量警示：过期通知数 > JobStreet 投递数 ===")
-cj = ce = 0
-for i in range(len(m)):
-    cj += js[i]; ce += exp[i]
-    if ce > cj:
-        print(f"  最早在 {m[i]}：累计过期 {ce} > 累计JobStreet投递 {cj}")
-        break
-print(f"  全期：累计过期 {sum(exp)} vs 累计JobStreet投递 {sum(js)}")
-print(f"  过期与上月投递相关 r = {r(js[:-1], exp[1:]):.2f}，与当月 r = {r(js, exp):.2f}（过期约滞后一个月，符合帖子30天有效期）")
+print("\n=== 4. 面试邀约从哪来（邮件里能查到的）===")
+def core(s):
+    s = re.sub(r"[^\w ]", " ", (s or "").lower())
+    stop = {"pte", "ltd", "singapore", "group", "inc", "the", "company", "engineering", "management", "s"}
+    return [t for t in s.split() if t not in stop]
+ats_rows = q("SELECT event_at, lower(coalesce(subject,'')||' '||coalesce(sender,'')) FROM application_events WHERE type='ats_ack'")
+src_count = {}
+for when, comp, title, app_ch in q("""SELECT e.event_at, e.company, e.job_title, a.channel FROM application_events e
+                                      LEFT JOIN application_log a ON a.app_id=e.app_id WHERE e.type='interview' ORDER BY 1"""):
+    if app_ch:
+        src = app_ch
+    else:
+        toks = core(comp)
+        hit = any(toks and toks[0] in txt and at <= when for at, txt in ats_rows)
+        src = "公司官网/ATS" if hit else "其他（猎头、内推、平台外联系等，邮件里无投递记录）"
+    src_count[src] = src_count.get(src, 0) + 1
+    print(f"  {when[:10]}  {comp}  |  {title or '-'}  |  来源：{src}")
+print("来源汇总：", src_count)

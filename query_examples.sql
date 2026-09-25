@@ -1,32 +1,34 @@
--- 常用查询示例，用 sqlite3 job_search_tracker.db 打开后直接跑，
--- 或者以后新开对话时让 Claude 先跑这几条，而不是重新翻 Gmail。
+-- 常用查询示例（第三版）。以 application_log / application_events 为准，
+-- monthly_stats 是旧看板的汇总，JobStreet 少计，只留作历史对照。
 
--- 1. 累计投递/结果总数（对应看板顶部的5个数字）
-SELECT SUM(total_submitted) AS 累计投递,
-       SUM(rejected) AS 累计拒信,
-       SUM(expired) AS 累计过期,
-       SUM(viewed) AS 累计查看待定
-FROM monthly_stats;
+-- 1. 各渠道投递数
+SELECT channel, COUNT(*) FROM application_log GROUP BY channel;
 
--- 2. 某个月的投递/结果明细
-SELECT * FROM monthly_stats WHERE month = '2026-08';
+-- 2. 每月投递数（按渠道）
+SELECT applied_month,
+       SUM(channel='JobStreet') AS JobStreet, SUM(channel='LinkedIn') AS LinkedIn,
+       SUM(channel='直投邮件') AS 直投, COUNT(*) AS 合计
+FROM application_log GROUP BY applied_month ORDER BY applied_month;
 
--- 3. 拒信原因抽样：总体 work-permit 引用率
-SELECT SUM(with_feedback) AS 有反馈详情合计,
-       SUM(cites_work_permit) AS 标注工作权限合计,
-       ROUND(100.0 * SUM(cites_work_permit) / SUM(with_feedback), 1) AS 占比百分比
-FROM rejection_sample;
+-- 3. 每份投递的最终结果分布（按渠道）
+SELECT channel, outcome, COUNT(*) FROM application_log GROUP BY channel, outcome ORDER BY channel, 3 DESC;
 
--- 4. 所有"未提工作权限"的例外案例，附公司背景
-SELECT r.month, r.company, r.job_title, r.reason_detail, c.sector, c.size_category
-FROM rejection_sample r LEFT JOIN companies c ON r.company = c.name
-WHERE r.is_exception = 1;
+-- 4. 查某家公司的全部投递和结果
+SELECT applied_at, channel, company, job_title, outcome, viewed_at, rejected_at, expired_at
+FROM application_log WHERE lower(company) LIKE '%mapletree%';
 
--- 5. 当前在跟进的投递，按行业统计数量
-SELECT sector, COUNT(*) AS 数量 FROM applications GROUP BY sector ORDER BY 数量 DESC;
+-- 5. 某份投递收到过哪些通知
+SELECT event_at, type, subject FROM application_events WHERE app_id = 1605 ORDER BY event_at;
 
--- 6. 当前在跟进的投递，按渠道统计数量
-SELECT channel, COUNT(*) AS 数量 FROM applications GROUP BY channel ORDER BY 数量 DESC;
+-- 6. 全部面试邀约及匹配到的投递
+SELECT e.event_at, e.company, e.job_title, a.channel, a.applied_at
+FROM application_events e LEFT JOIN application_log a ON a.app_id = e.app_id
+WHERE e.type = 'interview' ORDER BY e.event_at;
 
--- 7. 查数据核实到哪一天（增量更新前先看这个，决定从哪天开始查新邮件）
+-- 7. JobStreet 拒信前雇主是否打开过
+SELECT SUM(viewed_at IS NOT NULL AND viewed_at <= rejected_at) AS 看过再拒,
+       SUM(viewed_at IS NULL OR viewed_at > rejected_at) AS 没看就拒
+FROM application_log WHERE channel = 'JobStreet' AND rejected_at IS NOT NULL;
+
+-- 8. 数据核实到哪一天、有哪些已知问题
 SELECT * FROM meta;
