@@ -160,13 +160,16 @@ con.execute("INSERT OR REPLACE INTO meta VALUES ('application_log_note', ?)",
             ("逐条记录由多轮独立 Gmail 提取合并，按 message id 去重；抽查的 message id 均与 Gmail 原邮件一致。"
              "LinkedIn 确认邮件不含职位名，职位只在有 LinkedIn 拒信时才补上。",))
 con.execute("INSERT OR REPLACE INTO meta VALUES ('monthly_stats_superseded', ?)",
-            ("monthly_stats 是旧看板的月度汇总，JobStreet 投递严重少计（912 vs 逐条 1592），"
+            ("monthly_stats 是旧看板的月度汇总，JobStreet 投递严重少计（912 vs 截至2026-09-24逐条统计的 1592），"
              "原因是当时用搜索预览计数，每个按天合并的邮件线程只数到前5封。以 application_log 为准。",))
 con.execute("INSERT OR REPLACE INTO meta VALUES ('ats_ack_note', ?)",
-            ("application_events 里 type='ats_ack' 的 268 封是公司官网/ATS 的投递确认，"
+            (f"application_events 里 type='ats_ack' 的 {sum(1 for e in events if e['type'] == 'ats_ack')} 封是公司官网/ATS 的投递确认，"
              "尚未清洗成投递记录（有重复、提醒邮件），所以没计入 application_log。",))
 con.execute("INSERT OR REPLACE INTO meta VALUES ('direct_events_note', ?)",
             ("direct 渠道的拒信/面试由模型从邮件内容判断，按公司名模糊匹配（限60天内），可信度低于 JobStreet/LinkedIn 平台通知。",))
+con.execute("INSERT OR REPLACE INTO meta VALUES ('update_log', ?)",
+            ("2026-10-01 第四版：补入 2026-09-25 至 10-01 的 Gmail 记录（raw/upd_1001_*.jsonl），"
+             "Infosys 9/28 招聘专员来信要面试时段、尚未定时间，按面试邀约记入。",))
 con.commit()
 
 print("投递:", collections.Counter(a["channel"] for a in apps))

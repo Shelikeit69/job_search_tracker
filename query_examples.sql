@@ -1,4 +1,4 @@
--- 常用查询示例（第三版）。以 application_log / application_events 为准，
+-- 常用查询示例（第四版，数据截至 2026-10-01）。以 application_log / application_events 为准，
 -- monthly_stats 是旧看板的汇总，JobStreet 少计，只留作历史对照。
 
 -- 1. 各渠道投递数
@@ -32,3 +32,7 @@ FROM application_log WHERE channel = 'JobStreet' AND rejected_at IS NOT NULL;
 
 -- 8. 数据核实到哪一天、有哪些已知问题
 SELECT * FROM meta;
+
+-- 9. 某一天的投递明细（新加坡时间），代替单独的每日表格
+SELECT substr(applied_at, 12, 5) AS 时间, channel, company, job_title, outcome
+FROM application_log WHERE applied_at LIKE '2026-10-01%' ORDER BY applied_at;
